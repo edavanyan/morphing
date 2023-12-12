@@ -1,0 +1,93 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel Transform
+
+RWStructuredBuffer<float3> positions;
+StructuredBuffer<float3> vertex_buffer;
+StructuredBuffer<uint> triangle_buffer;
+
+uint resolution;
+uint triangles_count;
+uint positions_count;
+float transition_progress = 0;
+float scale = 1.0;
+float angle = 0.0;
+float points_per_triangle;
+const uint k = 1103515245U;
+
+float hash12(float2 p)
+{
+    float3 p3  = frac(float3(p.xyx) * .1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+float2 hash21(float p)
+{
+    float3 p3 = frac(p * float3(.1031, .1030, .0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.xx+p3.yz)*p3.zy);
+}
+
+float2 hash22(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * float3(.1031, .1030, .0973));
+    p3 += dot(p3, p3.yzx+33.33);
+    return frac((p3.xx+p3.yz)*p3.zy);
+
+}
+
+float3 hash( uint3 x )
+{
+    x = ((x>>8U)^x.yzx)*k;
+    x = ((x>>8U)^x.yzx)*k;
+    x = ((x>>8U)^x.yzx)*k;
+    
+    return float3(x)*(1.0/float(0xffffffffU));
+}
+
+float3 GetRandomBarycentricPoint(const float3 a, const float3 b, const float3 c, const float2 weights)
+{
+    const float r1 = weights.x;
+    const float r2 = weights.y;
+     
+    const float alpha = 1.0 - sqrt(r1);
+    const float beta = sqrt(r1) * (1.0 - r2);
+    const float gamma = sqrt(r1) * r2;
+
+    return alpha * a + beta * b + gamma * c;
+}
+
+float3 GetPositionOnMesh(const uint u, const uint v, StructuredBuffer<float3> vertices, StructuredBuffer<uint> triangles)
+{
+    const float3 a = vertices[triangles[u * 3]];
+    const float3 b = vertices[triangles[u * 3 + 1]];
+    const float3 c = vertices[triangles[u * 3 + 2]];
+    
+    const uint seed = u * points_per_triangle + v;
+    const float2 randomSample = hash22(float2(hash21(seed).x, hash21(seed).y));
+    return GetRandomBarycentricPoint(a, b, c, randomSample) * scale;
+}
+
+[numthreads(10,10,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    const uint index = id.x * points_per_triangle + id.y;
+    const uint tris = triangles_count / 3;
+    if (id.x < tris)
+    {
+        positions[index] = GetPositionOnMesh(id.x, id.y, vertex_buffer, triangle_buffer);
+    }
+}
+
+[numthreads(10, 10, 1)]
+void Transform(uint3 id : SV_DispatchThreadID)
+{
+    const uint currentIndex = id.x * points_per_triangle + id.y;
+    const uint tris = triangles_count / 3;
+    if (id.x < tris)
+    {
+        const float3 targetPosition = GetPositionOnMesh(id.x, id.y, vertex_buffer, triangle_buffer);
+        positions[currentIndex] = lerp(positions[currentIndex], targetPosition, transition_progress);
+    }
+}
